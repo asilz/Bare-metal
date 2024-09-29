@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <stdint.h>
 
 void spin(volatile uint32_t count)
 {
@@ -33,7 +34,7 @@ int gpio_set_alternate_function(struct gpio *port, uint8_t function, uint8_t pin
 
 int gpio_write(struct gpio *port, uint8_t pin, uint8_t state)
 {
-    port->BSRR = (1 << (pin + (1 - state) * 16));
+    port->BSRR = (1 << ((uint32_t)pin + (1U - (uint32_t)state) * 16U));
     return 0;
 }
 
@@ -143,54 +144,119 @@ int uart_write_buf(struct usart *uart, uint8_t *buf, uint32_t len)
     return 0;
 }
 
+int morse_init()
+{
+    RCC->AHB1ENR = RCC->AHB1ENR | 1;
+    return gpio_set_mode(GPIO_PORT(0), GPIO_MODE_OUTPUT, 5);
+}
+
+#define MORSE_DOT 0
+#define MORSE_DASH 1
+#define MORSE_TERMINATOR 2
+
+int morse_char(char letter)
+{
+    static const uint8_t morse_table[][4] = {
+        {MORSE_DOT, MORSE_DASH, MORSE_TERMINATOR, MORSE_TERMINATOR},        // A
+        {MORSE_DASH, MORSE_DOT, MORSE_DOT, MORSE_DOT},                      // B
+        {MORSE_DASH, MORSE_DOT, MORSE_DASH, MORSE_DOT},                     // C
+        {MORSE_DASH, MORSE_DOT, MORSE_DOT, MORSE_TERMINATOR},               // D
+        {MORSE_DOT, MORSE_TERMINATOR, MORSE_TERMINATOR, MORSE_TERMINATOR},  // E
+        {MORSE_DOT, MORSE_DOT, MORSE_DASH, MORSE_DOT},                      // F
+        {MORSE_DASH, MORSE_DASH, MORSE_DOT, MORSE_TERMINATOR},              // G
+        {MORSE_DOT, MORSE_DOT, MORSE_DOT, MORSE_DOT},                       // H
+        {MORSE_DOT, MORSE_DOT, MORSE_TERMINATOR, MORSE_TERMINATOR},         // I
+        {MORSE_DOT, MORSE_DASH, MORSE_DASH, MORSE_DASH},                    // J
+        {MORSE_DASH, MORSE_DOT, MORSE_DASH, MORSE_TERMINATOR},              // K
+        {MORSE_DOT, MORSE_DASH, MORSE_DOT, MORSE_DOT},                      // L
+        {MORSE_DASH, MORSE_DASH, MORSE_TERMINATOR, MORSE_TERMINATOR},       // M
+        {MORSE_DASH, MORSE_DOT, MORSE_TERMINATOR, MORSE_TERMINATOR},        // N
+        {MORSE_DASH, MORSE_DASH, MORSE_DASH, MORSE_TERMINATOR},             // O
+        {MORSE_DOT, MORSE_DASH, MORSE_DASH, MORSE_DOT},                     // P
+        {MORSE_DASH, MORSE_DASH, MORSE_DOT, MORSE_DASH},                    // Q
+        {MORSE_DOT, MORSE_DASH, MORSE_DOT, MORSE_TERMINATOR},               // R
+        {MORSE_DOT, MORSE_DOT, MORSE_DOT, MORSE_TERMINATOR},                // S
+        {MORSE_DASH, MORSE_TERMINATOR, MORSE_TERMINATOR, MORSE_TERMINATOR}, // T
+        {MORSE_DOT, MORSE_DOT, MORSE_DASH, MORSE_TERMINATOR},               // U
+        {MORSE_DOT, MORSE_DOT, MORSE_DOT, MORSE_DASH},                      // V
+        {MORSE_DOT, MORSE_DASH, MORSE_DASH, MORSE_TERMINATOR},              // W
+        {MORSE_DASH, MORSE_DOT, MORSE_DOT, MORSE_DASH},                     // X
+        {MORSE_DASH, MORSE_DOT, MORSE_DASH, MORSE_DASH},                    // Y
+        {MORSE_DASH, MORSE_DASH, MORSE_DOT, MORSE_DOT}                      // Z
+    };
+
+    if (letter > 'Z')
+    {
+        letter = letter - 'a';
+    }
+    else
+    {
+        letter = letter - 'A';
+    }
+
+    uint8_t index = 0;
+    while (morse_table[(uint8_t)letter][index++] != MORSE_TERMINATOR)
+    {
+        gpio_write(GPIO_PORT(0), 5, 1);
+        spin(morse_table[(uint8_t)letter][index] * 50000U * 3U + 50000U * 3U);
+        gpio_write(GPIO_PORT(0), 5, 0);
+    }
+    return 0;
+}
+
+int morse_word(char *message)
+{
+    while (*(message))
+    {
+        morse_char(*(message++));
+        spin(300000 * 3);
+    }
+    return 0;
+}
+
 int main(void)
 {
     int err = 0;
-    /*
+    err = morse_init();
 
-    struct rcc *r = RCC;
-    err = rcc_enable_gpio(r);
-
-    usart2_init();
-    for (uint32_t i = 0; i < 1000; ++i)
-    {
-        uart_write_buf(USART2, (uint8_t *)"chicken\r\n", 10);
-        spin(100);
-    }
-    */
-
-    struct rcc *r = RCC;
-    err = rcc_enable_gpio(r);
-
-    gpio_set_mode(GPIO_PORT(0), GPIO_MODE_OUTPUT, 5);
-    gpio_set_mode(GPIO_PORT(1), GPIO_MODE_OUTPUT, 13);
-
+    // Infinite loop
     for (;;)
     {
-        gpio_write(GPIO_PORT(1), 13, 1);
-        gpio_write(GPIO_PORT(0), 5, 1);
-        spin(999999);
-        gpio_write(GPIO_PORT(1), 13, 0);
-        gpio_write(GPIO_PORT(0), 5, 0);
-        spin(999999);
-    }
-
-    for (;;)
+        err = morse_word("SOS");
         (void)0;
+    }
+
     return err;
 }
 
-// Startup code
+extern uint32_t _sidata;
+extern uint32_t _sdata;
+extern uint32_t _edata;
+extern uint32_t _sbss;
+extern uint32_t _ebss;
+extern uint32_t _estack;
+
+// Entry
 __attribute__((naked, noreturn)) void _reset(void)
 {
-    // memset .bss to zero, and copy .data section to RAM region
-    extern long _sbss, _ebss, _sdata, _edata, _sidata;
-    for (long *dst = &_sbss; dst < &_ebss; dst++)
-        *dst = 0;
-    for (long *dst = &_sdata, *src = &_sidata; dst < &_edata;)
-        *dst++ = *src++;
 
-    main(); // Call main()
-    for (;;)
-        (void)0; // Infinite loop in the case if main() returns
+    /* Copy Data from FLASH to SRAM */
+    uint32_t *pSRC = (uint32_t *)&_sidata;
+    uint32_t *pDST = (uint32_t *)&_sdata;
+
+    for (uint32_t *dataptr = (uint32_t *)pDST; dataptr < &_edata;)
+    {
+
+        *dataptr++ = *pSRC++;
+    }
+    /** Initialize BSS with 0 **/
+    for (uint32_t *bss_ptr = (uint32_t *)&_sbss; bss_ptr < &_ebss;)
+    {
+        *bss_ptr++ = 0;
+    }
+    main();
 }
+
+__attribute__((section(".isr_vector"))) void (*const fpn_vector[])(void) = {
+    (void (*)(void))(&_estack),
+    _reset};
